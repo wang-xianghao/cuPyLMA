@@ -117,21 +117,16 @@ class ParallelPytorchAdapter:
         if configuration.VERBOSE_MODEL:
             print(f'[model] forward')
 
-        output_tensors = [None] * len(X.tensors)
-
         # Start forward pass on each device
         if configuration.TIMING_MODEL:
             start_time = time.perf_counter()
 
-        def forward_task(index):
-            device, tensor = X[index]
+        output_tensors = []
+        for device, tensor in X:
             model = self.device_to_model[device]
             buffer = self.device_to_buffer[device]
-            return torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
-
-        with Pool(len(X)) as pool:
-            output_tensors = pool.map(forward_task, range(len(X)))
-        y = ParallelTensor(output_tensors)
+            tensor = torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
+            output_tensors.append(tensor)
 
         if configuration.TIMING_MODEL:
             for device in self.devices:
@@ -140,4 +135,4 @@ class ParallelPytorchAdapter:
             elapsed_time = end_time - start_time
             print(f'\ttime: {elapsed_time:.3f} s')
         
-        return y
+        return ParallelTensor(output_tensors)
