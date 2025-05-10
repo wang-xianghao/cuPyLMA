@@ -1,7 +1,6 @@
 import torch
 import copy
 from typing import List
-from multiprocessing.dummy import Pool
 from ..config import configuration
 
 class ParallelTensor:
@@ -109,8 +108,12 @@ class ParallelPytorchAdapter:
 
         # Start forward pass on each device
         output_tensors = []
-        with Pool(len(X)) as pool:
-            output_tensors = pool.map(self._forward_task, X.tensors)
+        for device, tensor in X:
+            device = tensor.device
+            model = self.device_to_model[device]
+            buffer = self.device_to_buffer[device]
+            tensor = torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
+            output_tensors.append(tensor)
         
         return ParallelTensor(output_tensors)
 
