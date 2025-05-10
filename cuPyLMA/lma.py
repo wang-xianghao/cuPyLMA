@@ -1,5 +1,7 @@
 import cupynumeric as np
+from legate.timing import time
 from typing import Any, Callable, Tuple
+from .config import configuration
 
 class LMA:
     def __init__(
@@ -26,11 +28,12 @@ class LMA:
         self.damping_factor = damping_start
         self.dtype = np.float32
 
-    def step(self, X, y, slice_size=None):
+    def step(self, inputs_ten, targets_ten, slice_size=None):
         adpt = self.adapter
-        X = adpt.preprocess(X)
-        y = adpt.preprocess(y)
+        inputs_ten = adpt.preprocess(inputs_ten)
+        targets_ten = adpt.preprocess(targets_ten)
 
-        outputs_ten = adpt.forward(X)
-
-        pass
+        # Compute outputs
+        outputs_ten = adpt.forward(inputs_ten)
+        
+        

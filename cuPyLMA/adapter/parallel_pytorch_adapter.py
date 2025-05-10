@@ -1,5 +1,4 @@
 import torch
-import time
 import copy
 from typing import List
 from multiprocessing.dummy import Pool
@@ -70,12 +69,6 @@ class ParallelPytorchAdapter:
         # Backup model parameters
         self.save_model()
 
-        # Synchronize all devices
-        # XXX: this prevent interference on timing
-        # Could be removed for better performance (maybe)
-        for device in self.devices:
-            torch.cuda.synchronize(device)
-
     def save_model(self):
         if configuration.VERBOSE_MODEL:
             print("[model] save_model()")
@@ -95,22 +88,19 @@ class ParallelPytorchAdapter:
         mini_batches_device = [None] * mini_batch_num
 
         # Start parallel transfer
-        if configuration.TIMING_MODEL:
-            start_time = time.perf_counter()
-
         for device_i, mini_batch_host in enumerate(mini_batches_host):
             device = self.devices[device_i]
             # Transfer to the target device
             mini_batches_device[device_i] = mini_batch_host.to(device, non_blocking=True)
         
-        if configuration.TIMING_MODEL:
-            for device in self.devices:
-                torch.cuda.synchronize(device)
-            end_time = time.perf_counter()
-            elapsed_time = end_time - start_time
-            print(f'\ttime: {elapsed_time:.3f} s')
-        
         return ParallelTensor(mini_batches_device)
+
+    def _forward_task(self, tensor):
+        device = tensor.device
+        model = self.device_to_model[device]
+        buffer = self.device_to_buffer[device]
+        tensor = torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
+        return tensor
 
     @torch.no_grad()
     def forward(self, X: ParallelTensor):
@@ -118,21 +108,11 @@ class ParallelPytorchAdapter:
             print(f'[model] forward')
 
         # Start forward pass on each device
-        if configuration.TIMING_MODEL:
-            start_time = time.perf_counter()
-
         output_tensors = []
-        for device, tensor in X:
-            model = self.device_to_model[device]
-            buffer = self.device_to_buffer[device]
-            tensor = torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
-            output_tensors.append(tensor)
-
-        if configuration.TIMING_MODEL:
-            for device in self.devices:
-                torch.cuda.synchronize(device)
-            end_time = time.perf_counter()
-            elapsed_time = end_time - start_time
-            print(f'\ttime: {elapsed_time:.3f} s')
+        with Pool(len(X)) as pool:
+            output_tensors = pool.map(self._forward_task, X.tensors)
         
         return ParallelTensor(output_tensors)
+
+    def get_model_size(self):
+        pass
