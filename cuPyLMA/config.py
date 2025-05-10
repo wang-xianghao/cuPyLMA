@@ -7,5 +7,9 @@ class Configuration:
 
         # Debug
         self.VERBOSE_MODEL: bool = False
+        self.VERBOSE_OPTIM: bool = False
+
+        # Profiling
+        self.TIMING_MODEL: bool = False
 
 configuration = Configuration()

@@ -1,16 +1,36 @@
 import torch
-from ..config import configuration
+import time
+import copy
 from typing import List
 from multiprocessing.dummy import Pool
+from ..config import configuration
+
+class ParallelTensor:
+    def __init__(self, tensors):
+        self.tensors = tensors
+        self.devices = list(map(lambda x : x.device, tensors))
+
+    def __iter__(self):
+        for tensor in self.tensors:
+            yield tensor.device, tensor
+
+    def __getitem__(self, index):
+        return self.devices[index], self.tensors[index]
+
+    def __len__(self):
+        return len(self.tensors)
 
 class ParallelPytorchAdapter:
-    def _get_model_device(self, model):
+    def _get_device(self, model):
         return next(model.parameters()).device
     
-    def __init__(self, model: torch.nn.Module, devices: List[torch.device]):
-        main_model_device = self._get_model_device(model)
+    def __init__(self, main_model: torch.nn.Module, devices: List[torch.device]):
+        main_model_device = self._get_device(main_model)
         if main_model_device not in devices:
             raise ValueError(f"Cannot find main model's device {main_model_device} in {devices}")
+
+        if configuration.VERBOSE_MODEL:
+            print(f'[model] devices: {devices}')
 
         # Map device to model and the corresponding buffer
         self.device_to_model = {}
@@ -20,15 +40,13 @@ class ParallelPytorchAdapter:
         # Spawn models on multiple devices
         for device in devices:
             if device == main_model_device:
-                self.device_to_model[device] = model
+                self.device_to_model[device] = main_model
             else:
-                # Clone the model to the new device
-                cloned_model = model.to(device)
-                self.device_to_model[device] = cloned_model
+                # XXX: need a deepcopy
+                self.device_to_model[device] = copy.deepcopy(main_model).to(device)
 
         # Initialize buffer
-        for device in devices:
-            model = self.device_to_model[device]
+        for device, model in self.device_to_model.items():
             buffer = {}
             # Store parameters for stateless computation
             buffer['params'] = { n: p for n, p in model.named_parameters() if p.requires_grad }
@@ -62,6 +80,64 @@ class ParallelPytorchAdapter:
         if configuration.VERBOSE_MODEL:
             print("[model] save_model()")
 
-        for device in self.device_to_buffer.keys():
-            buffer = self.device_to_buffer[device]
+        for device, buffer in self.device_to_buffer.items():
             buffer['flat_params_backup'] = buffer['flat_params'].clone()
+
+    @torch.no_grad()
+    def preprocess(self, batch: torch.Tensor):
+        if configuration.VERBOSE_MODEL:
+            print(f'[model] preprocess({batch.data_ptr():x})')
+        
+        batch_size = batch.shape[0]
+        mini_batch_num = len(self.devices)
+        mini_batch_size = (batch_size + mini_batch_num - 1) // mini_batch_num
+        mini_batches_host = torch.split(batch, mini_batch_size)
+        mini_batches_device = [None] * mini_batch_num
+
+        # Start parallel transfer
+        if configuration.TIMING_MODEL:
+            start_time = time.perf_counter()
+
+        for device_i, mini_batch_host in enumerate(mini_batches_host):
+            device = self.devices[device_i]
+            # Transfer to the target device
+            mini_batches_device[device_i] = mini_batch_host.to(device, non_blocking=True)
+        
+        if configuration.TIMING_MODEL:
+            for device in self.devices:
+                torch.cuda.synchronize(device)
+            end_time = time.perf_counter()
+            elapsed_time = end_time - start_time
+            print(f'\ttime: {elapsed_time:.3f} s')
+        
+        return ParallelTensor(mini_batches_device)
+
+    @torch.no_grad()
+    def forward(self, X: ParallelTensor):
+        if configuration.VERBOSE_MODEL:
+            print(f'[model] forward')
+
+        output_tensors = [None] * len(X.tensors)
+
+        # Start forward pass on each device
+        if configuration.TIMING_MODEL:
+            start_time = time.perf_counter()
+
+        def forward_task(index):
+            device, tensor = X[index]
+            model = self.device_to_model[device]
+            buffer = self.device_to_buffer[device]
+            return torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
+
+        with Pool(len(X)) as pool:
+            output_tensors = pool.map(forward_task, range(len(X)))
+        y = ParallelTensor(output_tensors)
+
+        if configuration.TIMING_MODEL:
+            for device in self.devices:
+                torch.cuda.synchronize(device)
+            end_time = time.perf_counter()
+            elapsed_time = end_time - start_time
+            print(f'\ttime: {elapsed_time:.3f} s')
+        
+        return y
