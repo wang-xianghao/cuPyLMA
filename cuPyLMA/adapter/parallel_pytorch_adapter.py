@@ -3,6 +3,7 @@ import copy
 import cupynumeric as np
 from typing import List, Tuple, Callable
 from torch.cuda import nvtx
+from multiprocessing.dummy import Pool
 from ..config import configuration
 
 class ParallelTensor:
@@ -73,6 +74,7 @@ class ParallelPytorchAdapter:
         # Backup model parameters
         self.save_model()
 
+    @torch.no_grad()
     def save_model(self):
         if configuration.VERBOSE_MODEL:
             print("[model] save_model()")
@@ -99,7 +101,6 @@ class ParallelPytorchAdapter:
             # Divide the slice into mini-slices
             mini_slice_size = (slice_end - slice_start + self.num_devices - 1) // self.num_devices
             mini_slices = torch.split(slice, mini_slice_size)
-
             # Move each mini-slice to the corresponding device
             for device_i, mini_slice in enumerate(mini_slices):
                 device = self.devices[device_i]
@@ -107,13 +108,6 @@ class ParallelPytorchAdapter:
                 result_tensors.append(mini_slice_device)
         
         return ParallelTensor(result_tensors), slice_size
-
-    def _forward_task(self, tensor):
-        device = tensor.device
-        model = self.device_to_model[device]
-        buffer = self.device_to_buffer[device]
-        tensor = torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
-        return tensor
 
     @torch.no_grad()
     def forward(self, X: ParallelTensor):
@@ -145,7 +139,8 @@ class ParallelPytorchAdapter:
         }
         params_and_buffers = {**params, **buffers}
         outputs = torch.func.functional_call(model, params_and_buffers, inputs)
-        return residual_fn(ParallelTensor([outputs]), ParallelTensor([targets]))[0][1]
+        residual = residual_fn(ParallelTensor([outputs]), ParallelTensor([targets]))[0][1]
+        return residual
 
     @torch.no_grad()
     def jacobian(self, X: ParallelTensor, y: ParallelTensor, residual_fn: Callable) -> ParallelTensor:
@@ -172,7 +167,9 @@ class ParallelPytorchAdapter:
                 )
             )
             buffer = self.device_to_buffer[device]
+
             jacobian_mini_slice = jac_func(buffer['flat_params'])
+
             jacobian_mini_slices.append(jacobian_mini_slice)
 
         return ParallelTensor(jacobian_mini_slices)
@@ -188,30 +185,46 @@ class ParallelPytorchAdapter:
     def get_tensor_range(self, X: ParallelTensor, idx_start: int, idx_end: int) -> ParallelTensor:
         result_tensors = []
 
+        idx = 0
         for _, tensor in X:
-            result_tensors.append(tensor)
-            idx_start += tensor.shape[0]
-            if idx_start == idx_end:
+            if idx >= idx_start:
+                result_tensors.append(tensor)
+
+            idx += tensor.shape[0]
+
+            if idx == idx_end:
                 break
-            elif idx_start > idx_end:
+            elif idx > idx_end:
                 raise ValueError('Unaligned slice size')
 
         return ParallelTensor(result_tensors)
 
+    def synchronize(self):
+        for device in self.devices:
+            torch.cuda.synchronize(device)
+
     def tensor_to_cupynumeric(self, X: ParallelTensor, dtype: type) -> np.ndarray:
-        result_array = np.empty(X.shape, dtype=dtype)
+        result = np.empty(X.shape, dtype=dtype)
+
+        # with Pool(len(X.tensors)) as p:
+        #     result_arrays = p.map(self._tensor_to_cupynumeric_task, X.tensors)
+        
+        # idx = 0
+        # for arr in result_arrays:
+        #     idx_end = idx + arr.shape[0]
+        #     result[idx:idx_end] = arr
+        #     idx = idx_end
+
+        tensors_host = []
+        for device, tensor in X:
+            tensors_host.append(tensor.detach().to('cpu', non_blocking=True))
+
+        self.synchronize()
 
         idx = 0
-        for device, tensor in X:
-            idx_end = idx + tensor.shape[0]
-            
-            # if configuration.OPTIM_OVERLAP_TRANDFER:
-            #     transfer_stream = torch.cuda.Stream(device=device)
-            #     with transfer_stream:
-            #         result_array[idx:idx_end] = tensor.detach().cpu().numpy()
-            # else:
-            result_array[idx:idx_end] = tensor.detach().cpu().numpy()
-
+        for tensor_host in tensors_host:
+            idx_end = idx + tensor_host.shape[0]
+            result[idx:idx_end] = tensor_host.numpy()
             idx = idx_end
 
-        return result_array
+        return result

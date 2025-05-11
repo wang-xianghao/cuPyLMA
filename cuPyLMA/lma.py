@@ -29,7 +29,7 @@ class LMA:
         self.damping_up = damping_up
         self.damping_down = damping_down
         self.damping_factor = damping_start
-        self.dtype = np.float32
+        self.dtype = dtype
 
     def _build_equation_no_overlap(
         self, inputs_ten, targets_ten, residuals_ten, model_size, batch_size, slice_size
@@ -52,9 +52,7 @@ class LMA:
             with nvtx.range(f'jacobian_slice_transfer[{idx}:{idx_end}]'):
                 J[idx:idx_end] = adpt.tensor_to_cupynumeric(J_slice_ten, self.dtype)
 
-        print(np.linalg.norm(J))
-
-        return None, None, None
+        return J, None, None
 
     def step(self, inputs_ten: Any, targets_ten: Any, slice_size: int = None) -> bool:
         enable_overlap = configuration.OPTIM_OVERLAP_HESSIAN
@@ -89,3 +87,5 @@ class LMA:
                 batch_size,
                 slice_size
             )
+
+        return J
