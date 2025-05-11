@@ -198,5 +198,20 @@ class ParallelPytorchAdapter:
 
         return ParallelTensor(result_tensors)
 
-    def tensor_to_cupynumeric(self, X: ParallelTensor) -> np.ndarray:
-        pass
+    def tensor_to_cupynumeric(self, X: ParallelTensor, dtype: type) -> np.ndarray:
+        result_array = np.empty(X.shape, dtype=dtype)
+
+        idx = 0
+        for device, tensor in X:
+            idx_end = idx + tensor.shape[0]
+            
+            # if configuration.OPTIM_OVERLAP_TRANDFER:
+            #     transfer_stream = torch.cuda.Stream(device=device)
+            #     with transfer_stream:
+            #         result_array[idx:idx_end] = tensor.detach().cpu().numpy()
+            # else:
+            result_array[idx:idx_end] = tensor.detach().cpu().numpy()
+
+            idx = idx_end
+
+        return result_array

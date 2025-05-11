@@ -49,13 +49,15 @@ class LMA:
                     inputs_slice, targets_slice, self.residual_fn
                 )
 
-            # with nvtx.range(f'jacobian_slice_transfer[{idx}:{idx_end}]'):
-            #     J[idx:idx_end] = adpt.tensor_to_cupynumeric(J_slice_ten)
+            with nvtx.range(f'jacobian_slice_transfer[{idx}:{idx_end}]'):
+                J[idx:idx_end] = adpt.tensor_to_cupynumeric(J_slice_ten, self.dtype)
+
+        print(np.linalg.norm(J))
 
         return None, None, None
 
     def step(self, inputs_ten: Any, targets_ten: Any, slice_size: int = None) -> bool:
-        enable_overlap = configuration.OPTIM_OVERLAP
+        enable_overlap = configuration.OPTIM_OVERLAP_HESSIAN
         adpt = self.adapter
 
         # Preprocess tensors

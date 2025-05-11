@@ -6,7 +6,8 @@ class Configuration:
         self.UPDATE_ATTEMPTS: int = 10
 
         # Optimization
-        self.OPTIM_OVERLAP: bool = False
+        self.OPTIM_OVERLAP_HESSIAN: bool = False    # Overlap Jacobian slice computation with approximating Hessian
+        self.OPTIM_OVERLAP_TRANDFER: bool = True    # Overlap Jacobian slice computationw with transfer
 
         # Debug
         self.VERBOSE_MODEL: bool = False
