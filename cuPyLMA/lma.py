@@ -59,7 +59,7 @@ class LMA:
         # Preprocess tensors
         with nvtx.range("preprocess"):
             inputs_ten, slice_size = adpt.preprocess(inputs_ten, slice_size)
-            targets_ten, _, __ = adpt.preprocess(targets_ten, slice_size)
+            targets_ten, _ = adpt.preprocess(targets_ten, slice_size)
 
         # Compute outputs
         with nvtx.range("forward"):
