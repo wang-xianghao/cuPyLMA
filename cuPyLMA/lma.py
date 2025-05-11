@@ -34,13 +34,13 @@ class LMA:
     def _build_equation_no_overlap(
         self, inputs_ten, targets_ten, residuals_ten, model_size, batch_size, slice_size
     ):
-        adpt = self.adpater
+        adpt = self.adapter
         # Pre-allocated memory for distributed Jacobian
         J = np.empty((batch_size, model_size), dtype=self.dtype)
 
         # Compute Jacobian
         for idx in range(0, batch_size, slice_size):
-            idx_end = min(idx, idx + slice_size)
+            idx_end = min(batch_size, idx + slice_size)
             inputs_slice = adpt.get_tensor_range(inputs_ten, idx, idx_end)
             targets_slice = adpt.get_tensor_range(targets_ten, idx, idx_end)
 
@@ -49,8 +49,10 @@ class LMA:
                     inputs_slice, targets_slice, self.residual_fn
                 )
 
-            with nvtx.range(f'jacobian_slice_transfer[{idx}:{idx_end}]'):
-                J[idx:idx_end] = adpt.tensor_to_cupynumeric(J_slice_ten)
+            # with nvtx.range(f'jacobian_slice_transfer[{idx}:{idx_end}]'):
+            #     J[idx:idx_end] = adpt.tensor_to_cupynumeric(J_slice_ten)
+
+        return None, None, None
 
     def step(self, inputs_ten: Any, targets_ten: Any, slice_size: int = None) -> bool:
         enable_overlap = configuration.OPTIM_OVERLAP
@@ -72,16 +74,16 @@ class LMA:
         model_size = adpt.get_model_size()
         batch_size = adpt.get_tensor_shape(inputs_ten)[0]
 
-        # if enable_overlap:
-        #     # Overlap communication with approximated Hessian
-        #     raise NotImplementedError("No overlap implementation")
-        # else:
-        #     # Compute approximated Hessian after receiving the whole Jacobian
-        #     J, JJ, rhs = self._build_equation_no_overlap(
-        #         inputs_ten,
-        #         targets_ten,
-        #         residuals_ten,
-        #         model_size,
-        #         batch_size,
-        #         slice_size
-        #     )
+        if enable_overlap:
+            # Overlap communication with approximated Hessian
+            raise NotImplementedError("No overlap implementation")
+        else:
+            # Compute approximated Hessian after receiving the whole Jacobian
+            J, JJ, rhs = self._build_equation_no_overlap(
+                inputs_ten,
+                targets_ten,
+                residuals_ten,
+                model_size,
+                batch_size,
+                slice_size
+            )

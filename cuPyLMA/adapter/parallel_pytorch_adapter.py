@@ -132,15 +132,50 @@ class ParallelPytorchAdapter:
         
         return ParallelTensor(output_tensors)
 
-    @torch.no_grad()
-    def jacobian(self, X: ParallelTensor, y: ParallelTensor, residual_fn: Callable) -> np.ndarray:
-        # Get Jacobian size
-        model_size = self.get_model_size()
-        batch_size = X.shape[0]
+    def _compute_residuals(self, flat_params, inputs, targets, residual_fn):
+        device = flat_params.device
+        buffer = self.device_to_buffer[device]
+        model = self.device_to_model[device]
         
-        # Distribute Jacobian computation
-        for i in range(len(X)):
-            pass
+        buffers = dict(model.named_buffers())
+        param_list = torch.split(flat_params, buffer['params_shape'])
+        params = {
+            name: tensor.view_as(param)
+            for (name, param), tensor in zip(buffer['params'].items(), param_list)
+        }
+        params_and_buffers = {**params, **buffers}
+        outputs = torch.func.functional_call(model, params_and_buffers, inputs)
+        return residual_fn(ParallelTensor([outputs]), ParallelTensor([targets]))[0][1]
+
+    @torch.no_grad()
+    def jacobian(self, X: ParallelTensor, y: ParallelTensor, residual_fn: Callable) -> ParallelTensor:
+        # Get Jacobian slice size and mini-slice size
+        model_size = self.get_model_size()
+        mini_slice_size = X.tensors[0].shape[0]
+        
+        # Determine Jacobian evaluation method
+        if mini_slice_size > model_size:
+            jac_build = torch.func.jacfwd
+        else:
+            jac_build = torch.func.jacrev
+
+        jacobian_mini_slices = []
+        
+        # Compute each Jacobian mini-slice
+        for (device, input_tensor), (_, target_tensor) in zip(X, y):
+            jac_func = jac_build(
+                lambda p: self._compute_residuals(
+                    p,
+                    input_tensor,
+                    target_tensor,
+                    residual_fn,
+                )
+            )
+            buffer = self.device_to_buffer[device]
+            jacobian_mini_slice = jac_func(buffer['flat_params'])
+            jacobian_mini_slices.append(jacobian_mini_slice)
+
+        return ParallelTensor(jacobian_mini_slices)
         
 
     def get_model_size(self) -> int:
