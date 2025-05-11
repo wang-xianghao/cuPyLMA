@@ -1,27 +1,31 @@
 import torch
 import copy
-from typing import List
+import cupynumeric as np
+from typing import List, Tuple, Callable
+from torch.cuda import nvtx
 from ..config import configuration
 
 class ParallelTensor:
     def __init__(self, tensors):
         self.tensors = tensors
-        self.devices = list(map(lambda x : x.device, tensors))
+        shape_0 = sum(map(lambda t : t.shape[0], self.tensors))
+        self._shape = (shape_0, ) + self.tensors[0].shape[1:]
+
+    @property
+    def shape(self) -> Tuple[int]:
+        return self._shape
 
     def __iter__(self):
         for tensor in self.tensors:
             yield tensor.device, tensor
 
     def __getitem__(self, index):
-        return self.devices[index], self.tensors[index]
-
-    def __len__(self):
-        return len(self.tensors)
+        return self.tensors[index].device, self.tensors[index]
 
 class ParallelPytorchAdapter:
     def _get_device(self, model):
         return next(model.parameters()).device
-    
+        
     def __init__(self, main_model: torch.nn.Module, devices: List[torch.device]):
         main_model_device = self._get_device(main_model)
         if main_model_device not in devices:
@@ -34,6 +38,7 @@ class ParallelPytorchAdapter:
         self.device_to_model = {}
         self.device_to_buffer = {}
         self.devices = devices
+        self.num_devices = len(self.devices)
 
         # Spawn models on multiple devices
         for device in devices:
@@ -72,27 +77,36 @@ class ParallelPytorchAdapter:
         if configuration.VERBOSE_MODEL:
             print("[model] save_model()")
 
-        for device, buffer in self.device_to_buffer.items():
+        for _, buffer in self.device_to_buffer.items():
             buffer['flat_params_backup'] = buffer['flat_params'].clone()
 
     @torch.no_grad()
-    def preprocess(self, batch: torch.Tensor):
+    def preprocess(self, batch: torch.Tensor, slice_size: int) -> Tuple[ParallelTensor, int]:
         if configuration.VERBOSE_MODEL:
             print(f'[model] preprocess({batch.data_ptr():x})')
         
+        # Determine slice size
         batch_size = batch.shape[0]
-        mini_batch_num = len(self.devices)
-        mini_batch_size = (batch_size + mini_batch_num - 1) // mini_batch_num
-        mini_batches_host = torch.split(batch, mini_batch_size)
-        mini_batches_device = [None] * mini_batch_num
+        if slice_size is None or slice_size > batch_size:
+            slice_size = batch_size
 
-        # Start parallel transfer
-        for device_i, mini_batch_host in enumerate(mini_batches_host):
-            device = self.devices[device_i]
-            # Transfer to the target device
-            mini_batches_device[device_i] = mini_batch_host.to(device, non_blocking=True)
+        # Distribute each slice to multiple GPU
+        result_tensors = []
+        for slice_start in range(0, batch_size, slice_size):
+            slice_end = min(slice_start + slice_size, batch_size)
+            slice = batch[slice_start:slice_end]
+
+            # Divide the slice into mini-slices
+            mini_slice_size = (slice_end - slice_start + self.num_devices - 1) // self.num_devices
+            mini_slices = torch.split(slice, mini_slice_size)
+
+            # Move each mini-slice to the corresponding device
+            for device_i, mini_slice in enumerate(mini_slices):
+                device = self.devices[device_i]
+                mini_slice_device = mini_slice.to(device, non_blocking=True)
+                result_tensors.append(mini_slice_device)
         
-        return ParallelTensor(mini_batches_device)
+        return ParallelTensor(result_tensors), slice_size
 
     def _forward_task(self, tensor):
         device = tensor.device
@@ -109,13 +123,45 @@ class ParallelPytorchAdapter:
         # Start forward pass on each device
         output_tensors = []
         for device, tensor in X:
-            device = tensor.device
-            model = self.device_to_model[device]
-            buffer = self.device_to_buffer[device]
-            tensor = torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
-            output_tensors.append(tensor)
+            with nvtx.range('forward_slice'):
+                device = tensor.device
+                model = self.device_to_model[device]
+                buffer = self.device_to_buffer[device]
+                tensor = torch.func.functional_call(model, buffer['params_and_buffers'], tensor)
+                output_tensors.append(tensor)
         
         return ParallelTensor(output_tensors)
 
-    def get_model_size(self):
+    @torch.no_grad()
+    def jacobian(self, X: ParallelTensor, y: ParallelTensor, residual_fn: Callable) -> np.ndarray:
+        # Get Jacobian size
+        model_size = self.get_model_size()
+        batch_size = X.shape[0]
+        
+        # Distribute Jacobian computation
+        for i in range(len(X)):
+            pass
+        
+
+    def get_model_size(self) -> int:
+        buffer = self.device_to_buffer[self.devices[0]]
+        return buffer['flat_params'].shape[0]
+
+    def get_tensor_shape(self, X: ParallelTensor) -> Tuple[int]:
+        return X.shape
+
+    def get_tensor_range(self, X: ParallelTensor, idx_start: int, idx_end: int) -> ParallelTensor:
+        result_tensors = []
+
+        for _, tensor in X:
+            result_tensors.append(tensor)
+            idx_start += tensor.shape[0]
+            if idx_start == idx_end:
+                break
+            elif idx_start > idx_end:
+                raise ValueError('Unaligned slice size')
+
+        return ParallelTensor(result_tensors)
+
+    def tensor_to_cupynumeric(self, X: ParallelTensor) -> np.ndarray:
         pass
