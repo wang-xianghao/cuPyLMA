@@ -1,11 +1,11 @@
 import cupynumeric as np
 import torch
 import copy
+import warnings
 
 from queue import Queue
-from legate.timing import time
 from torch.cuda import nvtx
-from typing import Any, Callable, Tuple, List
+from typing import Callable, Tuple, List
 
 from .config import configuration
 from .sliced_tensor import SlicedTensor
@@ -18,6 +18,18 @@ class LMA:
     def _save_parameters(self):
         for buffer in self.device_buffer_map.values():
             buffer['flat_params_backup'] = buffer['flat_params'].clone()
+
+    @torch.no_grad()
+    def _update_parameters(self, h_update: torch.Tensor):
+        '''Update each model'''
+        for device, buffer in self.device_buffer_map.items():
+            buffer['flat_params'].add_(-h_update.to(device))
+
+    @torch.no_grad()
+    def _restore_parameters(self):
+        for buffer in self.device_buffer_map.values():
+            buffer['flat_params'].copy_(buffer['flat_params_backup'])
+
 
     def _replicate_model(self, source_model, devices):
         '''Replicate model on each device and initialize the corresponing buffer'''
@@ -218,9 +230,26 @@ class LMA:
             else:
                 JJ = J @ J.T
                 rhs = r
+
+        # Normalization
+        normalization_factor = 1.0 / batch_size
+        np.multiply(normalization_factor, JJ, out=JJ)
+        np.multiply(normalization_factor, rhs, out=rhs)
                 
         return J, JJ, rhs
-        
+
+    def _compute_loss(self, sliced_outputs, sliced_targets) -> float:
+        '''Compute the loss
+            XXX: this assumes using a MSE loss
+        '''
+        overall_loss = 0.0
+        total_items = 0
+        for output_tensor, target_tensor in zip(sliced_outputs, sliced_targets):
+            loss_val = self.loss_fn(output_tensor, target_tensor).item()
+            overall_loss += loss_val * output_tensor.shape[0]
+            total_items += output_tensor.shape[0]
+
+        return overall_loss / total_items
 
     def __init__(
         self,
@@ -251,11 +280,12 @@ class LMA:
         self.devices = devices
         self.num_devices = len(self.devices)
         self.model_size = next(iter(self.device_buffer_map.values()))['flat_params'].shape[0]
+        self.model_dtype = next(iter(self.device_buffer_map.values()))['flat_params'].dtype
 
         # Backup parameters
         self._save_parameters()
 
-    def step(self, h_inputs: Any, h_targets: Any, slice_size: int = None) -> bool:
+    def step(self, h_inputs: torch.Tensor, h_targets: torch.Tensor, slice_size: int = None) -> bool:
 
         # Preprocess tensors
         with nvtx.range("preprocess"):
@@ -277,6 +307,56 @@ class LMA:
         model_size = self.model_size
         batch_size = sliced_inputs.shape[0]
 
+        # Build equation
         J, JJ, rhs = self._build_equation_no_overlap(sliced_inputs, sliced_targets, sliced_residuals, model_size, batch_size)
+        overdetermined = batch_size > model_size
 
-        return J
+        loss_val = self._compute_loss(sliced_outputs, sliced_targets)
+        terminating = False
+        for i in range(configuration.UPDATE_ATTEMPTS):
+            # Computed damped LHS
+            JJ_damped = JJ + self.damping_factor * np.eye(JJ.shape[0], dtype=self.dtype)
+
+            # Try to solve equation of updates
+            solved = False
+            try:
+                updates = self.solver(JJ_damped, rhs)
+                solved = True
+            except Exception as e:
+                warnings.warn(f'Singular matrix occurs: damping_factor={self.damping_factor}')
+
+            if solved:
+                if not overdetermined:
+                    assert J is not None
+                    updates = J.T @ updates
+                
+                # Pinned host updates
+                h_updates = torch.tensor(updates, dtype=self.model_dtype, device='cpu', pin_memory=True)
+                self._update_parameters(h_updates)
+
+                # Update criteria check
+                sliced_outputs = self._forward(sliced_inputs)
+                new_loss_val = self._compute_loss(sliced_outputs, sliced_targets)
+                if new_loss_val < loss_val:
+                    loss_val = new_loss_val
+
+                    # Success in updating, then damp down and save the model
+                    self.damping_factor = max(self.damping_factor * self.damping_down, configuration.DAMPING_MIN)
+                    self._save_parameters()
+                    break
+                else:
+                    warnings.warn('Failed attempt due to increasing loss')
+                    self._restore_parameters()
+            
+            # Fail in updating, damp up
+            self.damping_factor *= self.damping_up
+
+            # Termination criteria check
+            terminating = self.damping_factor >= configuration.DAMPING_MAX
+            if terminating:
+                # Warn and reset damping factor
+                warnings.warn('Terminated due to large damping factor')
+                self.damping_factor = self.damping_start
+                break
+
+        return loss_val, terminating
