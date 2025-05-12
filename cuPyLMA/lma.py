@@ -76,6 +76,7 @@ class LMA:
     
     @torch.no_grad()
     def _forward(self, sliced_inputs: SlicedTensor) -> SlicedTensor:
+        '''Perform forward pass on sliced input tensors'''
         outputs_list = []
 
         for tensor in sliced_inputs:
@@ -88,6 +89,7 @@ class LMA:
         return SlicedTensor(outputs_list)
 
     def _compute_residuals(self, flat_params, input_tensor, target_tensor, residual_fn):
+        '''Compute residuals with model parameters as the input'''
         device = flat_params.device
         buffer = self.device_buffer_map[device]
         model = self.device_model_map[device]
@@ -103,11 +105,13 @@ class LMA:
         return residual_fn(output_tensor, target_tensor)
 
     def _synchronize(self):
+        '''Synchronize all devices'''
         for device in self.devices:
             torch.cuda.synchronize(device)
 
     @torch.no_grad
     def _jacobian(self, input_tensor: torch.Tensor, target_tensor: torch.Tensor, residual_fn: Callable) -> torch.Tensor:
+        '''Compute one mini-slice of Jacobian'''
         model_size = self.model_size
         batch_size = input_tensor.shape[0]
 
@@ -142,10 +146,13 @@ class LMA:
         # Compute Jacobian
         idx = 0
         for input_tensor, target_tensor in zip(sliced_inputs, sliced_targets):
-            d_mini_slice = self._jacobian(input_tensor, target_tensor, self.residual_fn)
-            h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True)
-            h_mini_slice_list.append((h_mini_slice, idx, idx + d_mini_slice.shape[0]))
-            idx += d_mini_slice.shape[0]
+            idx_end = idx + input_tensor.shape[0]
+            with nvtx.range(f'jacobian_mini_slice_compute[{idx}:{idx_end}]'):
+                d_mini_slice = self._jacobian(input_tensor, target_tensor, self.residual_fn)
+            with nvtx.range(f'jacobian_mini_slice_transfer[{idx}:{idx_end}]'):
+                h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True)
+            h_mini_slice_list.append((h_mini_slice, idx, idx_end))
+            idx = idx_end
 
         self._synchronize()
         for h_mini_slice, idx, idx_end in h_mini_slice_list:
