@@ -2,9 +2,9 @@ import cupynumeric as np
 import torch
 import copy
 import warnings
+import nvtx
 
 from queue import Queue
-from torch.cuda import nvtx
 from typing import Callable, Tuple, List
 
 from .config import configuration
@@ -14,6 +14,7 @@ NP_TORCH_TYPE_MAP = {np.float32 : torch.float32}
 TORCH_NP_TYPE_MAP = {torch.float32 : np.float32}
 
 class LMA:
+    @nvtx.annotate('save_parameters', domain='cuPyLMA', category='torch', color='orange')
     @torch.no_grad()
     def _save_parameters(self):
         for buffer in self.device_buffer_map.values():
@@ -25,12 +26,13 @@ class LMA:
         for device, buffer in self.device_buffer_map.items():
             buffer['flat_params'].add_(-h_update.to(device))
 
+    @nvtx.annotate('restore_parameters', domain='cuPyLMA', category='torch', color='orange')
     @torch.no_grad()
     def _restore_parameters(self):
         for buffer in self.device_buffer_map.values():
             buffer['flat_params'].copy_(buffer['flat_params_backup'])
 
-
+    @nvtx.annotate('replicate_model', domain='cuPyLMA', category='communication', color='red')
     def _replicate_model(self, source_model, devices):
         '''Replicate model on each device and initialize the corresponing buffer'''
         device_model_map = {}
@@ -67,6 +69,7 @@ class LMA:
 
         return device_model_map, device_buffer_map
 
+    @nvtx.annotate('preprocess', domain='cuPyLMA', category='communication', color='red')
     @torch.no_grad()
     def _preprocess(self, h_batch: torch.Tensor, slice_size: int) -> Tuple[SlicedTensor, int]:
         '''Slice batch into mini-slices and distribute them to devices'''
@@ -89,6 +92,7 @@ class LMA:
 
         return SlicedTensor(d_mini_slice_list), slice_size
     
+    @nvtx.annotate('forward', domain='cuPyLMA', category='torch', color='orange')
     @torch.no_grad()
     def _forward(self, sliced_inputs: SlicedTensor) -> SlicedTensor:
         '''Perform forward pass on sliced input tensors'''
@@ -96,10 +100,9 @@ class LMA:
 
         for tensor in sliced_inputs:
             device = tensor.device
-            with nvtx.range('forward_slice'):
-                model = self.device_model_map[device]
-                buffer = self.device_buffer_map[device]
-                outputs_list.append(torch.func.functional_call(model, buffer['params_and_buffers'], tensor))
+            model = self.device_model_map[device]
+            buffer = self.device_buffer_map[device]
+            outputs_list.append(torch.func.functional_call(model, buffer['params_and_buffers'], tensor))
 
         return SlicedTensor(outputs_list)
 
@@ -187,7 +190,7 @@ class LMA:
             device = input_tensor.device
 
             # Transfer residual
-            with nvtx.range(f'residual_d2h[{mini_slice_start}:{mini_slice_end}]'):
+            with nvtx.annotate(f'residual_d2h[{mini_slice_start}:{mini_slice_end}]', domain='cuPyLMA', category='communication', color='red'):
                 if overlap_h2d:
                     d2h_stream = torch.cuda.Stream(device) if overlap_d2h_h2d else torch.cuda.current_stream(device)
                     h_target_tensor, copy_event = self._async_copy_to_host(residual_tensor, d2h_stream)
@@ -196,11 +199,11 @@ class LMA:
                     r[mini_slice_start:mini_slice_end] = self._sync_copy_to_host(residual_tensor)
             
             # Compute mini-slice
-            with nvtx.range(f'jacobian[{mini_slice_start}:{mini_slice_end}]'):
+            with nvtx.annotate(f'jacobian[{mini_slice_start}:{mini_slice_end}]', domain='cuPyLMA', category='torch', color='orange'):
                 d_mini_slice = self._jacobian(input_tensor, target_tensor, self.residual_fn)
                 
             # Transfer mini-slice
-            with nvtx.range(f'jacobian_d2h[{mini_slice_start}:{mini_slice_end}]'):
+            with nvtx.annotate(f'jacobian_d2h[{mini_slice_start}:{mini_slice_end}]', domain='cuPyLMA', category='communication', color='red'):
                 if overlap_h2d:
                     d2h_stream = torch.cuda.Stream(device) if overlap_d2h_h2d else torch.cuda.current_stream(device)
                     d2h_stream.wait_stream(torch.cuda.current_stream(device)) # Wait for completing Jacobian computation
@@ -216,14 +219,14 @@ class LMA:
             while not host_buffer.empty():
                 x, s, i, j, e = host_buffer.get()
                 if e.query():
-                    with nvtx.range(f'h2d[{i}:{j}]'):
+                    with nvtx.annotate(f'jacobian_residual_h2d[{mini_slice_start}:{mini_slice_end}]', domain='cuPyLMA', category='communication', color='red'):
                         x[i:j] = s
                 else:
                     host_buffer.put((x, s, i, j, e))
 
         '''Compute approximate Hessian and equation RHS'''
         # Determine equation
-        with nvtx.range(f'equation_build'):
+        with nvtx.annotate('build_equation', domain='cuPyLMA', category='cupynumeric', color='green'):
             if batch_size > model_size:
                 JJ = J.T @ J
                 rhs = J.T @ r
@@ -232,12 +235,14 @@ class LMA:
                 rhs = r
 
         # Normalization
-        normalization_factor = 1.0 / batch_size
-        np.multiply(normalization_factor, JJ, out=JJ)
-        np.multiply(normalization_factor, rhs, out=rhs)
+        with nvtx.annotate('normalization', domain='cuPyLMA', category='cupynumeric', color='green'):
+            normalization_factor = 1.0 / batch_size
+            np.multiply(normalization_factor, JJ, out=JJ)
+            np.multiply(normalization_factor, rhs, out=rhs)
                 
         return J, JJ, rhs
 
+    @nvtx.annotate(f'loss', domain='cuPyLMA', category='torch', color='orange')
     def _compute_loss(self, sliced_outputs, sliced_targets) -> float:
         '''Compute the loss
             XXX: this assumes using a MSE loss
@@ -288,16 +293,14 @@ class LMA:
     def step(self, h_inputs: torch.Tensor, h_targets: torch.Tensor, slice_size: int = None) -> bool:
 
         # Preprocess tensors
-        with nvtx.range("preprocess"):
-            sliced_inputs, slice_size = self._preprocess(h_inputs, slice_size)
-            sliced_targets, _ = self._preprocess(h_targets, slice_size)
+        sliced_inputs, slice_size = self._preprocess(h_inputs, slice_size)
+        sliced_targets, _ = self._preprocess(h_targets, slice_size)
 
         # Compute outputs
-        with nvtx.range("forward"):
-            sliced_outputs = self._forward(sliced_inputs)
+        sliced_outputs = self._forward(sliced_inputs)
         
         # Compute residuals
-        with nvtx.range("residual_fn"):
+        with nvtx.annotate('compute_residual', domain='cuPyLMA', category='torch', color='orange'):
             residual_list = []
             for output_tensor, target_tensor in zip(sliced_outputs, sliced_targets):
                 residual_list.append(self.residual_fn(output_tensor, target_tensor))
@@ -315,12 +318,14 @@ class LMA:
         terminating = False
         for i in range(configuration.UPDATE_ATTEMPTS):
             # Computed damped LHS
-            JJ_damped = JJ + self.damping_factor * np.eye(JJ.shape[0], dtype=self.dtype)
+            with nvtx.annotate(f'damped_hessian', domain='cuPyLMA', category='cupynumeric', color='green'):
+                JJ_damped = JJ + self.damping_factor * np.eye(JJ.shape[0], dtype=self.dtype)
 
             # Try to solve equation of updates
             solved = False
             try:
-                updates = self.solver(JJ_damped, rhs)
+                with nvtx.annotate(f'solve', domain='cuPyLMA', category='cupynumeric', color='green'):
+                    updates = self.solver(JJ_damped, rhs)
                 solved = True
             except Exception as e:
                 warnings.warn(f'Singular matrix occurs: damping_factor={self.damping_factor}')
@@ -328,7 +333,8 @@ class LMA:
             if solved:
                 if not overdetermined:
                     assert J is not None
-                    updates = J.T @ updates
+                    with nvtx.annotate(f'underdetermined_operation', domain='cuPyLMA', category='cupynumeric', color='green'):
+                        updates = J.T @ updates
                 
                 # Pinned host updates
                 h_updates = torch.tensor(updates, dtype=self.model_dtype, device='cpu', pin_memory=True)
