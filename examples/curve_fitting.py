@@ -9,7 +9,8 @@ from cuPyLMA import configuration
 torch.manual_seed(0)
 
 # Optimization flags
-# configuration.OPTIM_OVERLAP_TRANDFER = False
+configuration.OPTIM_OVERLAP_H2D = True
+configuration.OPTIM_OVERLAP_D2H_H2D = True
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser()
@@ -58,18 +59,19 @@ for i in range(torch.cuda.device_count() - gpus, torch.cuda.device_count()):
 model = DNN().to(devices[0])
 def residual_fn(a, b):
     return torch.flatten(a - b)
-lma = cuPyLMA.LMA(model, devices, None, residual_fn)
+loss_fn = torch.nn.MSELoss()
+lma = cuPyLMA.LMA(model, devices, loss_fn, residual_fn)
 
 # Test
 import cupynumeric as np
 all_times = []
 for i in range(epochs):
     start = time()
-    J = lma.step(x_train, y_train, slice_size)
+    loss, terminated = lma.step(x_train, y_train, slice_size)
     for device in devices:
         torch.cuda.synchronize(device)
     end = time()
-    print(np.sum(J))
+    print(loss)
     if i > 0:
         all_times.append((end - start) / 1e6)
 
