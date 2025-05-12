@@ -140,15 +140,26 @@ class LMA:
 
         return J
 
+    def _async_copy_to_host(self, d_tensor: torch.Tensor, stream: torch.cuda.Stream = None) -> Tuple[torch.Tensor, torch.cuda.Event]:
+        '''Asynchronously copying tensor to the host within a stream'''
+        if stream is None:
+            stream = torch.cuda.current_stream(d_tensor.device)
+        with torch.cuda.stream(stream):
+            h_tensor = d_tensor.to('cpu', non_blocking=True)
+            copy_event = stream.record_event()
+            return h_tensor, copy_event
+
     def _build_equation_no_overlap(self, sliced_inputs, sliced_targets, sliced_residuals, model_size, batch_size):
         overlap_h2d = configuration.OPTIM_OVERLAP_H2D
         overlap_d2h_h2d = configuration.OPTIM_OVERLAP_D2H_H2D
 
         if overlap_d2h_h2d and not overlap_h2d:
             raise ValueError('Enabling bi-direction overlap require host-to-device overlap')
-
+        
+        '''Compute Jacobian matrix'''
         # Distributed jacobian matrix on multiple devices
         J = np.empty((batch_size, model_size), dtype=self.dtype)
+        # reisduals = np.empty()
 
         # Buffer for temporary mini-slices on the host
         host_buffer = Queue()
@@ -165,17 +176,10 @@ class LMA:
             # Transfer mini-slice
             with nvtx.range(f'jacobian_d2h[{mini_slice_start}:{mini_slice_end}]'):
                 if overlap_h2d:
-                    if overlap_d2h_h2d:
-                        d2h_stream = torch.cuda.Stream(device)
-                        with torch.cuda.stream(d2h_stream):
-                            d2h_stream.wait_stream(torch.cuda.default_stream(device))
-                            h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True) # D2H
-                            transfer_complete_event = d2h_stream.record_event() # Indicate end transferring
-                            host_buffer.put((h_mini_slice, mini_slice_start, mini_slice_end, transfer_complete_event))
-                    else:
-                        h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True) # D2H
-                        transfer_complete_event = torch.cuda.current_stream(device).record_event() # indicate end transferring
-                        host_buffer.put((h_mini_slice, mini_slice_start, mini_slice_end, transfer_complete_event))
+                    d2h_stream = torch.cuda.Stream(device) if overlap_d2h_h2d else torch.cuda.current_stream(device)
+                    d2h_stream.wait_stream(torch.cuda.current_stream(device)) # Wait for completing Jacobian computation
+                    h_mini_slice, copy_event = self._async_copy_to_host(d_mini_slice.detach(), d2h_stream)
+                    host_buffer.put((h_mini_slice, mini_slice_start, mini_slice_end, copy_event))
                 else:
                     h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True) # D2H
                     torch.cuda.synchronize(device)
@@ -192,6 +196,12 @@ class LMA:
                         J[i:j] = s
                 else:
                     host_buffer.put((s, i, j, e))
+
+        # '''Compute approximate Hessian and equation RHS'''
+        # # Determine equation
+        # if batch_size > model_size:
+        #     JJ = J.T @ J
+        #     rhs = J.T @ r
                 
         return J, None, None
         
