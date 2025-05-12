@@ -149,6 +149,11 @@ class LMA:
             copy_event = stream.record_event()
             return h_tensor, copy_event
 
+    def _sync_copy_to_host(self, d_tensor: torch.Tensor) -> torch.Tensor:
+        h_tensor = d_tensor.detach().to('cpu', non_blocking=True)
+        torch.cuda.synchronize(d_tensor.device)
+        return h_tensor
+
     def _build_equation_no_overlap(self, sliced_inputs, sliced_targets, sliced_residuals, model_size, batch_size):
         overlap_h2d = configuration.OPTIM_OVERLAP_H2D
         overlap_d2h_h2d = configuration.OPTIM_OVERLAP_D2H_H2D
@@ -156,19 +161,28 @@ class LMA:
         if overlap_d2h_h2d and not overlap_h2d:
             raise ValueError('Enabling bi-direction overlap require host-to-device overlap')
         
-        '''Compute Jacobian matrix'''
-        # Distributed jacobian matrix on multiple devices
+        # Distributed jacobian matrix and residuals on multiple devices
         J = np.empty((batch_size, model_size), dtype=self.dtype)
-        # reisduals = np.empty()
+        r = np.empty(batch_size, dtype=self.dtype)
 
+        '''Compute Jacobian matrix'''
         # Buffer for temporary mini-slices on the host
         host_buffer = Queue()
 
         mini_slice_start = 0
-        for input_tensor, target_tensor in zip(sliced_inputs, sliced_targets):
+        for input_tensor, target_tensor, residual_tensor in zip(sliced_inputs, sliced_targets, sliced_residuals):
             mini_slice_end = mini_slice_start + input_tensor.shape[0]
             device = input_tensor.device
 
+            # Transfer residual
+            with nvtx.range(f'residual_d2h[{mini_slice_start}:{mini_slice_end}]'):
+                if overlap_h2d:
+                    d2h_stream = torch.cuda.Stream(device) if overlap_d2h_h2d else torch.cuda.current_stream(device)
+                    h_target_tensor, copy_event = self._async_copy_to_host(residual_tensor, d2h_stream)
+                    host_buffer.put((r, h_target_tensor, mini_slice_start, mini_slice_end, copy_event))
+                else:
+                    r[mini_slice_start:mini_slice_end] = self._sync_copy_to_host(residual_tensor)
+            
             # Compute mini-slice
             with nvtx.range(f'jacobian[{mini_slice_start}:{mini_slice_end}]'):
                 d_mini_slice = self._jacobian(input_tensor, target_tensor, self.residual_fn)
@@ -179,31 +193,33 @@ class LMA:
                     d2h_stream = torch.cuda.Stream(device) if overlap_d2h_h2d else torch.cuda.current_stream(device)
                     d2h_stream.wait_stream(torch.cuda.current_stream(device)) # Wait for completing Jacobian computation
                     h_mini_slice, copy_event = self._async_copy_to_host(d_mini_slice.detach(), d2h_stream)
-                    host_buffer.put((h_mini_slice, mini_slice_start, mini_slice_end, copy_event))
+                    host_buffer.put((J, h_mini_slice, mini_slice_start, mini_slice_end, copy_event))
                 else:
-                    h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True) # D2H
-                    torch.cuda.synchronize(device)
-                    J[mini_slice_start:mini_slice_end] = h_mini_slice # H2D
+                    J[mini_slice_start:mini_slice_end] = self._sync_copy_to_host(d_mini_slice.detach())
             
             # Next mini-slice
             mini_slice_start = mini_slice_end
 
         if overlap_h2d:
             while not host_buffer.empty():
-                s, i, j, e = host_buffer.get()
+                x, s, i, j, e = host_buffer.get()
                 if e.query():
-                    with nvtx.range(f'jacobian_h2d[{i}:{j}]'):
-                        J[i:j] = s
+                    with nvtx.range(f'h2d[{i}:{j}]'):
+                        x[i:j] = s
                 else:
-                    host_buffer.put((s, i, j, e))
+                    host_buffer.put((x, s, i, j, e))
 
-        # '''Compute approximate Hessian and equation RHS'''
-        # # Determine equation
-        # if batch_size > model_size:
-        #     JJ = J.T @ J
-        #     rhs = J.T @ r
+        '''Compute approximate Hessian and equation RHS'''
+        # Determine equation
+        with nvtx.range(f'equation_build'):
+            if batch_size > model_size:
+                JJ = J.T @ J
+                rhs = J.T @ r
+            else:
+                JJ = J @ J.T
+                rhs = r
                 
-        return J, None, None
+        return J, JJ, rhs
         
 
     def __init__(
