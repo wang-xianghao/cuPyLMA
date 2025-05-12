@@ -2,6 +2,7 @@ import cupynumeric as np
 import torch
 import copy
 
+from queue import Queue
 from legate.timing import time
 from torch.cuda import nvtx
 from typing import Any, Callable, Tuple, List
@@ -9,6 +10,8 @@ from typing import Any, Callable, Tuple, List
 from .config import configuration
 from .sliced_tensor import SlicedTensor
 
+NP_TORCH_TYPE_MAP = {np.float32 : torch.float32}
+TORCH_NP_TYPE_MAP = {torch.float32 : np.float32}
 
 class LMA:
     @torch.no_grad()
@@ -138,38 +141,58 @@ class LMA:
         return J
 
     def _build_equation_no_overlap(self, sliced_inputs, sliced_targets, sliced_residuals, model_size, batch_size):
-        overlap_transfer = configuration.OPTIM_OVERLAP_TRANDFER
-        
-        # Pre-allocated memory for distributed Jacobian
+        overlap_h2d = configuration.OPTIM_OVERLAP_H2D
+        overlap_d2h_h2d = configuration.OPTIM_OVERLAP_D2H_H2D
+
+        if overlap_d2h_h2d and not overlap_h2d:
+            raise ValueError('Enabling bi-direction overlap require host-to-device overlap')
+
+        # Distributed jacobian matrix on multiple devices
         J = np.empty((batch_size, model_size), dtype=self.dtype)
 
-        h_mini_slice_list = []
+        # Buffer for temporary mini-slices on the host
+        host_buffer = Queue()
 
-        # Compute Jacobian
-        idx = 0
+        mini_slice_start = 0
         for input_tensor, target_tensor in zip(sliced_inputs, sliced_targets):
-            idx_end = idx + input_tensor.shape[0]
-            with nvtx.range(f'jacobian_mini_slice_compute[{idx}:{idx_end}]'):
+            mini_slice_end = mini_slice_start + input_tensor.shape[0]
+            device = input_tensor.device
+
+            # Compute mini-slice
+            with nvtx.range(f'jacobian[{mini_slice_start}:{mini_slice_end}]'):
                 d_mini_slice = self._jacobian(input_tensor, target_tensor, self.residual_fn)
-            with nvtx.range(f'jacobian_mini_slice_transfer[{idx}:{idx_end}]'):
-                if overlap_transfer:
-                    # Overlap Jacobian computation with transfer
-                    stream = torch.cuda.Stream(input_tensor.device)
-                    with torch.cuda.stream(stream):
-                        stream.wait_stream(torch.cuda.default_stream(input_tensor.device))
-                        h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True)
-                        h_mini_slice_list.append((h_mini_slice, idx, idx_end))
+                
+            # Transfer mini-slice
+            with nvtx.range(f'jacobian_d2h[{mini_slice_start}:{mini_slice_end}]'):
+                if overlap_h2d:
+                    if overlap_d2h_h2d:
+                        d2h_stream = torch.cuda.Stream(device)
+                        with torch.cuda.stream(d2h_stream):
+                            d2h_stream.wait_stream(torch.cuda.default_stream(device))
+                            h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True) # D2H
+                            transfer_complete_event = d2h_stream.record_event() # Indicate end transferring
+                            host_buffer.put((h_mini_slice, mini_slice_start, mini_slice_end, transfer_complete_event))
+                    else:
+                        h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True) # D2H
+                        transfer_complete_event = torch.cuda.current_stream(device).record_event() # indicate end transferring
+                        host_buffer.put((h_mini_slice, mini_slice_start, mini_slice_end, transfer_complete_event))
                 else:
-                    # No overlap
-                    J[idx:idx_end] = d_mini_slice.detach().cpu()
-            idx = idx_end
+                    h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True) # D2H
+                    torch.cuda.synchronize(device)
+                    J[mini_slice_start:mini_slice_end] = h_mini_slice # H2D
+            
+            # Next mini-slice
+            mini_slice_start = mini_slice_end
 
-        if overlap_transfer:
-            # Wait all async transfers
-            self._synchronize()
-            for h_mini_slice, idx, idx_end in h_mini_slice_list:
-                J[idx:idx_end] = h_mini_slice
-
+        if overlap_h2d:
+            while not host_buffer.empty():
+                s, i, j, e = host_buffer.get()
+                if e.query():
+                    with nvtx.range(f'jacobian_h2d[{i}:{j}]'):
+                        J[i:j] = s
+                else:
+                    host_buffer.put((s, i, j, e))
+                
         return J, None, None
         
 

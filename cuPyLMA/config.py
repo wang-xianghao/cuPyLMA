@@ -6,8 +6,9 @@ class Configuration:
         self.UPDATE_ATTEMPTS: int = 10
 
         # Optimization
-        self.OPTIM_OVERLAP_HESSIAN: bool = False    # Overlap Jacobian slice computation with approximating Hessian
-        self.OPTIM_OVERLAP_TRANDFER: bool = True    # Overlap Jacobian slice computationw with transfer
+        self.OPTIM_OVERLAP_H2D: bool = True         # Overlap Jacobian computation with host-to-device communication
+        self.OPTIM_OVERLAP_D2H_H2D: bool = True     # Overlap Jacobian computation with both device-to-host
+                                                    # and host-to-device communication
 
         # Debug
         self.VERBOSE_MODEL: bool = False
