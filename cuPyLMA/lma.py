@@ -138,6 +138,8 @@ class LMA:
         return J
 
     def _build_equation_no_overlap(self, sliced_inputs, sliced_targets, sliced_residuals, model_size, batch_size):
+        overlap_transfer = configuration.OPTIM_OVERLAP_TRANDFER
+        
         # Pre-allocated memory for distributed Jacobian
         J = np.empty((batch_size, model_size), dtype=self.dtype)
 
@@ -150,13 +152,23 @@ class LMA:
             with nvtx.range(f'jacobian_mini_slice_compute[{idx}:{idx_end}]'):
                 d_mini_slice = self._jacobian(input_tensor, target_tensor, self.residual_fn)
             with nvtx.range(f'jacobian_mini_slice_transfer[{idx}:{idx_end}]'):
-                h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True)
-            h_mini_slice_list.append((h_mini_slice, idx, idx_end))
+                if overlap_transfer:
+                    # Overlap Jacobian computation with transfer
+                    stream = torch.cuda.Stream(input_tensor.device)
+                    with torch.cuda.stream(stream):
+                        stream.wait_stream(torch.cuda.default_stream(input_tensor.device))
+                        h_mini_slice = d_mini_slice.detach().to('cpu', non_blocking=True)
+                        h_mini_slice_list.append((h_mini_slice, idx, idx_end))
+                else:
+                    # No overlap
+                    J[idx:idx_end] = d_mini_slice.detach().cpu()
             idx = idx_end
 
-        self._synchronize()
-        for h_mini_slice, idx, idx_end in h_mini_slice_list:
-            J[idx:idx_end] = h_mini_slice
+        if overlap_transfer:
+            # Wait all async transfers
+            self._synchronize()
+            for h_mini_slice, idx, idx_end in h_mini_slice_list:
+                J[idx:idx_end] = h_mini_slice
 
         return J, None, None
         
