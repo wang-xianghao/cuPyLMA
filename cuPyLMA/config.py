@@ -14,4 +14,7 @@ class Configuration:
         self.VERBOSE_MODEL: bool = False
         self.VERBOSE_OPTIM: bool = False
 
+        self.FORCED_JACOBIAN_MODE: bool = False
+        self.JACOBIAN_MODE: str = 'forward'
+
 configuration = Configuration()

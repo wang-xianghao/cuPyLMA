@@ -133,25 +133,42 @@ class LMA:
         model_size = self.model_size
         batch_size = input_tensor.shape[0]
 
-        # Determine Jacobian evaluation method
-        if batch_size > model_size:
-            jac_build = torch.func.jacfwd
-        else:
-            jac_build = torch.func.jacrev
-
-        # Compute Jacobian
-        jac_func = jac_build(
-            lambda p: self._compute_residuals(
+        # Residual function of model parameters
+        f = lambda p: self._compute_residuals(
                 p,
                 input_tensor,
                 target_tensor,
                 residual_fn,
             )
-        )
 
+        # Extract model parameters
         device = input_tensor.device
         buffer = self.device_buffer_map[device]
-        J = jac_func(buffer['flat_params'])
+        model_params = buffer['flat_params']
+
+        # Determine Jacobian evaluation method
+        if not configuration.FORCED_JACOBIAN_MODE:
+            if batch_size > model_size:
+                jac_build = torch.func.jacfwd
+            else:
+                jac_build = torch.func.jacrev
+        else:
+            mode = configuration.JACOBIAN_MODE
+            if mode == 'forward':
+                jac_build = torch.func.jacfwd
+            elif mode == 'reverse':
+                jac_build = torch.func.jacrev
+            elif mode == 'graph':
+                device = input_tensor.device
+                buffer = self.device_buffer_map[device]
+                J = torch.autograd.functional.jacobian(f, model_params, create_graph=True, vectorize=True)
+                return J
+            else:
+                raise NotImplementedError(f'{mode} is not implemented!')
+
+        # Compute Jacobian
+        jac_func = jac_build(f)
+        J = jac_func(model_params)
 
         return J
 
