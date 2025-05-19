@@ -38,9 +38,11 @@ class LMA:
         device_model_map = {}
         device_buffer_map = {}
 
+        source_device = next(source_model.parameters()).device
+
         # Replicate model
         for device in devices:
-            if device == source_model:
+            if device == source_device:
                 device_model_map[device] = source_model
             else:
                 device_model_map[device] = copy.deepcopy(source_model).to(device)
@@ -383,3 +385,6 @@ class LMA:
                 break
 
         return loss_val, terminating
+
+    def zero_grad(self):
+        pass
