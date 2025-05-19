@@ -1,0 +1,3 @@
+CUPYNUMERIC_FAST_MATH=1 legate --cpus 16 --gpus 1 benchmarks/preliminary/solve/run_solve_err.py benchmarks/preliminary/solve/result/tf32.csv fp32 5000
+legate --cpus 16 --gpus 1 benchmarks/preliminary/solve/run_solve_err.py benchmarks/preliminary/solve/result/fp32.csv fp32 5000
+legate --cpus 16 --gpus 1 benchmarks/preliminary/solve/run_solve_err.py benchmarks/preliminary/solve/result/fp64.csv fp64 5000
