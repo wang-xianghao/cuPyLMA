@@ -75,24 +75,36 @@ class LMA:
     @torch.no_grad()
     def _preprocess(self, h_batch: torch.Tensor, slice_size: int) -> Tuple[SlicedTensor, int]:
         '''Slice batch into mini-slices and distribute them to devices'''
+        num_devices = len(self.devices)
         batch_size = h_batch.shape[0]
         if slice_size is None or slice_size > batch_size:
-            slice_size = batch_size
+            slice_size = (batch_size + num_devices - 1) // num_devices
+        
+        h_slice_list = torch.split(h_batch, slice_size)
+        d_slice_list = []
 
-        d_mini_slice_list = []
-        for slice_start in range(0, batch_size, slice_size): # Split batch into slices
-            slice_end = min(slice_start + slice_size, batch_size)
-            h_slice = h_batch[slice_start:slice_end]
+        if configuration.OPTIM_CYCLIC_DISPATCH:
+            # Dispatch sliced task to devices in a cyclic way
+            device_idx = 0
+            for h_slice in h_slice_list:
+                device = self.devices[device_idx]
+                d_slice = h_slice.to(device, non_blocking=True)
+                d_slice_list.append(d_slice)
+                device_idx = (device_idx + 1) % num_devices
+        else:
+            # Dispatch sliced task to devices in a block way
+            num_slices = len(h_slice_list)
+            num_slices_per_device = (num_slices + num_devices - 1) // num_devices
+            device_idx = 0
+            for start_idx in range(0, num_slices, num_slices_per_device):
+                end_idx = min(start_idx + num_slices_per_device, num_slices)
+                device = self.devices[device_idx]
+                for idx in range(start_idx, end_idx):
+                    d_slice = h_slice_list[idx].to(device, non_blocking=True)
+                    d_slice_list.append(d_slice)
+                device_idx += 1
 
-            mini_slice_size = (slice_end - slice_start + self.num_devices - 1) // self.num_devices
-            h_mini_slice_list = torch.split(h_slice, mini_slice_size)
-            # XXX: figure out whether how async memcopy works
-            for device_i, mini_slice in enumerate(h_mini_slice_list): # Split slice into mini-slices
-                device = self.devices[device_i]
-                d_mini_slice = mini_slice.to(device, non_blocking=True)
-                d_mini_slice_list.append(d_mini_slice)
-
-        return SlicedTensor(d_mini_slice_list), slice_size
+        return SlicedTensor(d_slice_list), slice_size
     
     @nvtx.annotate('forward', domain='cuPyLMA', category='torch', color='orange')
     @torch.no_grad()

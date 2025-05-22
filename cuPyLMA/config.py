@@ -9,6 +9,7 @@ class Configuration:
         self.OPTIM_OVERLAP_H2D: bool = True         # Overlap Jacobian computation with host-to-device communication
         self.OPTIM_OVERLAP_D2H_H2D: bool = True     # Overlap Jacobian computation with both device-to-host
                                                     # and host-to-device communication
+        self.OPTIM_CYCLIC_DISPATCH: bool = True     # Allocate sliced task to each device in a cyclic way
 
         # Debug
         self.VERBOSE_MODEL: bool = False
