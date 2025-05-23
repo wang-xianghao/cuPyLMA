@@ -214,6 +214,11 @@ class LMA:
         '''Compute Jacobian matrix'''
         # Buffer for temporary mini-slices on the host
         host_buffer = Queue()
+        # d2h transfer streams
+        if overlap_d2h_h2d:
+            stream_device_map = {device : torch.cuda.Stream(device) for device in self.devices}
+        else:
+            stream_device_map = {device : torch.cuda.default_stream(device) for device in self.devices}
 
         mini_slice_start = 0
         for input_tensor, target_tensor, residual_tensor in zip(sliced_inputs, sliced_targets, sliced_residuals):
@@ -223,20 +228,20 @@ class LMA:
             # Transfer residual
             with nvtx.annotate(f'residual_d2h[{mini_slice_start}:{mini_slice_end}]', domain='cuPyLMA', category='communication', color='red'):
                 if overlap_h2d:
-                    d2h_stream = torch.cuda.Stream(device) if overlap_d2h_h2d else torch.cuda.current_stream(device)
+                    d2h_stream = stream_device_map[device]
                     h_target_tensor, copy_event = self._async_copy_to_host(residual_tensor, d2h_stream)
                     host_buffer.put((r, h_target_tensor, mini_slice_start, mini_slice_end, copy_event))
                 else:
                     r[mini_slice_start:mini_slice_end] = self._sync_copy_to_host(residual_tensor)
             
-            # Compute mini-slice
+            # Compute slice
             with nvtx.annotate(f'jacobian[{mini_slice_start}:{mini_slice_end}]', domain='cuPyLMA', category='torch', color='orange'):
                 d_mini_slice = self._jacobian(input_tensor, target_tensor, self.residual_fn)
                 
-            # Transfer mini-slice
+            # Transfer slice
             with nvtx.annotate(f'jacobian_d2h[{mini_slice_start}:{mini_slice_end}]', domain='cuPyLMA', category='communication', color='red'):
                 if overlap_h2d:
-                    d2h_stream = torch.cuda.Stream(device) if overlap_d2h_h2d else torch.cuda.current_stream(device)
+                    d2h_stream = stream_device_map[device]
                     d2h_stream.wait_stream(torch.cuda.current_stream(device)) # Wait for completing Jacobian computation
                     h_mini_slice, copy_event = self._async_copy_to_host(d_mini_slice.detach(), d2h_stream)
                     host_buffer.put((J, h_mini_slice, mini_slice_start, mini_slice_end, copy_event))
