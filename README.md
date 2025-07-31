@@ -1,7 +1,7 @@
-cuPyLMA: Multi-GPU Levenberg-Marquardt Deep Learning Optimizer Powered by NVIDIA cuPyNumeric.
+cuPyLMA: a Multi-GPU Levenberg-Marquardt (Deep Learning) Optimizer Powered by NVIDIA cuPyNumeric.
 =============================================
 
-cuPyLMA is a deep learning optimizer based on Levenberg-Marquardt algoritm. It supports multi-GPU execution via [NVIDIA cuPyNumeric](https://github.com/nv-legate/cupynumeric), which is a NumPy-like scientific computing framework.
+cuPyLMA is a scalable (deep learning) optimizer based on Levenberg-Marquardt algoritm. It supports multi-GPU execution via [NVIDIA cuPyNumeric](https://github.com/nv-legate/cupynumeric), which is a NumPy-like scientific computing framework.
 
 cuPyLMA exploits the performance of multiple GPUs. cuPyLMA explicitly stores the full Jacobian matrix required by Levenberg-Marquardt algorithm for performance, which is in contrast to the most common solutions which implicitly represents the Jacobian matrix via Jacobian-vector product (JVP) and vector-Jacobian product (VJP) and thus lacks parallelism.
 
