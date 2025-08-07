@@ -50,3 +50,7 @@ cuPyLMA automatically selects the best strategy for Jacobian matrix computation 
 ## Changelog
 ### Release 0.1
 * First release
+
+## Citation
+In construction ...
+
