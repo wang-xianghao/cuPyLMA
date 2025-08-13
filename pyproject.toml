@@ -1,6 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "cuPyLMA"
 version = "0.1"
+dependencies = [
+  "torch",
+  "torchvision"
+]
 authors = [
   { name="Xianghao Wang", email="wang.xianghao@outlook.com" },
 ]
