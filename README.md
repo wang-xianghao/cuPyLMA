@@ -10,8 +10,14 @@ cuPyLMA's design consists of two components and each one holds a seperate set of
 - **Optimizer component** receives the Jacobian matrix from the model component and solves the optimal parameter updates by the Levenberg-Marqurdt algorithm via cuPyNumeric.
 
 ## Installation
-
-TODO: upload to pip
+cuPyLMA is built on cuPyNumeric which is only avaiable on conda.
+```python
+# Insatll dependency cuPyNumeric
+CONDA_OVERRIDE_CUDA="12.2" \
+  conda install -c conda-forge -c legate cupynumeric
+# Install cuPyLMA
+pip install cuPyLMA
+```
 
 ## Usage
 The following codes show steps to adapt exisitng PyTorch training code to utilize cuPyLMA.
@@ -52,5 +58,5 @@ cuPyLMA automatically selects the best strategy for Jacobian matrix computation 
 * First release
 
 ## Citation
-In construction ...
+Coming soon ......
 
