@@ -63,4 +63,9 @@ cuPyLMA automatically selects the best strategy for Jacobian matrix computation 
 ## Citation
 Coming soon ......
 
+## Reference
+If you want to lean more about Levenberg-Marquardt algorithm, the following are the recommended materials.
+
+
+
 
