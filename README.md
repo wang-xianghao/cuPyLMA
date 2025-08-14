@@ -15,6 +15,9 @@ cuPyLMA is built on cuPyNumeric which is only avaiable on conda.
 # Insatll dependency cuPyNumeric
 CONDA_OVERRIDE_CUDA="12.2" \
   conda install -c conda-forge -c legate cupynumeric
+# Install cuPyLMA's depdencies
+# TODO: fix automatically installing dependencies
+pip install torch torchvision
 # Install cuPyLMA
 pip install cuPyLMA
 ```
@@ -59,4 +62,5 @@ cuPyLMA automatically selects the best strategy for Jacobian matrix computation 
 
 ## Citation
 Coming soon ......
+
 
