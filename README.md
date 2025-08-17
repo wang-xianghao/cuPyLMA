@@ -5,7 +5,9 @@ cuPyLMA is a scalable multi-GPU (deep learning) optimizer that implements the [L
 
 ## Background
 The [Levenberg-Marquardt algorithm (LMA)](https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm) is a second-order optimizer. It solves parameter updates $\mathbf{v}$ from the equation involving the Jacobian matrix $\mathbf{J}$ of the batched outputs with respect to model parameters, and the residuals $\mathbf{r}$.
-$$(\mathbf{J}^T\mathbf{J}+\lambda \mathbf{I})\mathbf{v} = \mathbf{J}^Tr$$
+$$
+(\mathbf{J}^T\mathbf{J}+\lambda \mathbf{I})\mathbf{v} = \mathbf{J}^Tr
+$$
 
 The Jacobian matrix requires large computation and memory space. To resolve them, we take advantage of [NVIDIA cuPyNumeric](https://github.com/nv-legate/cupynumeric). This NumPy-like scientific computing framework automatically distributes the Jacobian matrix and schedules computation to multiple GPUs.
 
