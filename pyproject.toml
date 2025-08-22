@@ -1,13 +1,15 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
 
 [project]
-name = "cuPyLMA"
-version = "0.1"
+name = "cupylma"
+version = "0.1.1"
 dependencies = [
+  "nvidia-cupynumeric",
   "torch",
-  "torchvision"
+  "torchvision",
+  "nvtx"
 ]
 authors = [
   { name="Xianghao Wang", email="wang.xianghao@outlook.com" },
@@ -22,3 +24,6 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/wang-xianghao/cuPyLMA"
 Issues = "https://github.com/wang-xianghao/cuPyLMA/issues"
+
+[tool.setuptools]
+packages = ["cuPyLMA"]
