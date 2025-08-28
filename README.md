@@ -31,7 +31,7 @@ The Jacobian matrix requires large computation and memory space. To resolve them
 ## Install
 ### Pip
 ```bash
-pip install cuPyLMA
+pip install cupylma
 ```
 
 ## Usage
