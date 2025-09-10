@@ -297,7 +297,6 @@ class LMA:
         # TODO: add adapter type
         model: torch.nn.Module,
         devices: List[torch.device],
-        loss_fn: Callable,
         residual_fn: Callable,
         solver: Callable = np.linalg.solve,
         learning_rate: float = 0.1,
@@ -306,8 +305,6 @@ class LMA:
         damping_down: float = 0.1,
         dtype=np.float32,
     ):
-        self.loss_fn = loss_fn
-        self.residual_fn = residual_fn
         self.solver = solver
         self.learning_rate = learning_rate
         self.damping_start = damping_start
@@ -325,6 +322,18 @@ class LMA:
 
         # Backup parameters
         self._save_parameters()
+
+        # Configure residual_fn and loss_fn
+        def flatten_residual_fn(a, b):
+            r = residual_fn(a, b)
+            return torch.flatten(r)
+        self.residual_fn = flatten_residual_fn
+
+        def loss_fn(a, b):
+            r = self.residual_fn(a, b)
+            return torch.sum(r ** 2)
+        self.loss_fn = loss_fn
+            
 
     def step(self, h_inputs: torch.Tensor, h_targets: torch.Tensor, slice_size: int = None) -> bool:
 
