@@ -26,4 +26,4 @@ Homepage = "https://github.com/wang-xianghao/cuPyLMA"
 Issues = "https://github.com/wang-xianghao/cuPyLMA/issues"
 
 [tool.setuptools]
-packages = ["cuPyLMA"]
+packages = ["cupylma"]
