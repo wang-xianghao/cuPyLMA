@@ -331,7 +331,7 @@ class LMA:
 
         def loss_fn(a, b):
             r = self.residual_fn(a, b)
-            return torch.sum(r ** 2)
+            return r.square().mean()
         self.loss_fn = loss_fn
             
 
