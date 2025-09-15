@@ -1,4 +1,4 @@
-# Train sine cardinal curve fitting
+# Training sine cardinal curve fitting with cuPyLMA
 
 In this tutorial, we demonstrate how to train simple dense model on curve fitting problem, taking $sinc$ function as an example.
 
