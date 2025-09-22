@@ -1,7 +1,6 @@
 import cupylma
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 
 from legate.timing import time
 from cupylma import LMA, get_available_gpus
@@ -16,10 +15,12 @@ parser = ArgumentParser()
 parser.add_argument('--batch_size', type=int, default=10000, help='batch size')
 parser.add_argument('--slice_size', type=int, default=None, help='slice size')
 parser.add_argument('--epochs', type=int, default=10, help='number of epochs')
+parser.add_argument('--save_model', action='store_true')
 args = parser.parse_args()
 batch_size = args.batch_size
 slice_size = args.slice_size
 num_epochs = args.epochs
+save_model = args.save_model
 
 # Allocate GPUs to the model component
 devices = get_available_gpus()
@@ -40,7 +41,6 @@ lma = LMA(model, devices, residual_fn)
 
 # Train
 epoch_times = []
-epoch_losses = []
 for epoch in range(1, num_epochs + 1):
     avg_loss = 0.0
     epoch_start = time()
@@ -52,7 +52,6 @@ for epoch in range(1, num_epochs + 1):
 
     avg_loss /= len(train_dataset)
     epoch_times.append(epoch_time)
-    epoch_losses.append(avg_loss)
     print(f'Epoch {epoch:3d}/{num_epochs:3d}: loss {avg_loss:10.3e}, epoch time {epoch_time:6.3f} seconds')
 
 # Print statistics
@@ -60,3 +59,7 @@ epoch_times = epoch_times[1:-1]
 print('')
 print(f'Avg. epoch time: {np.mean(epoch_times):6.3f} seconds')
 print(f'Std. epoch time: {np.std(epoch_times, ddof=1):6.3f} seconds')
+
+# Save the model
+if save_model:
+    torch.save(model.state_dict(), 'curve_dense.pt')
