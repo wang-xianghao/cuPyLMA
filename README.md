@@ -1,41 +1,46 @@
-cuPyLMA: a Multi-GPU Levenberg-Marquardt (Deep Learning) Optimizer Powered by NVIDIA cuPyNumeric
-=======================================
+# cuPyLMA: a Multi-GPU Levenberg-Marquardt (Deep Learning) Optimizer Powered by NVIDIA cuPyNumeric
 
-cuPyLMA is a scalable multi-GPU (deep learning) optimizer that implements the [Levenberg-Marquardt algorithm (LMA)](https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm). This library is built on PyTorch and powered by [NVIDIA cuPyNumeric](https://github.com/nv-legate/cupynumeric) (a NumPy-like scientific computing framework).
+[**Background**](#background)
+| [**Installation**](#installation)
+| [**Code Migration**](#code-migration)
+| [**Examples**](#examples)
+| [**Performance**](#performance)
+| [**Change logs**](CHANGELOG.md)
+
+cuPyLMA is a scalable multi-GPU (deep learning optimizer) optimizer which implements the [Levenberg-Marquardt algorithm (LMA)](https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm). This library is built on PyTorch and [NVIDIA cuPyNumeric](https://github.com/nv-legate/cupynumeric) (a NumPy-like scientific computing framework).
 
 ## Background
-The [Levenberg-Marquardt algorithm (LMA)](https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm) is a second-order optimizer. It solves parameter updates $\mathbf{v}$ from the equation involving the Jacobian matrix $\mathbf{J}$ of the batched outputs with respect to model parameters, and the residuals $\mathbf{r}$.
-
+The [Levenberg-Marquardt algorithm (LMA)](https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm) is a second-order optimization algorithm that utilizes the Jacobian matrix of the residuals to compute optimal parameter updates. In contrast, the widely used first-order optimizer Adam relies on the gradient of the loss function to determine these updates.
 $$
-\large (\mathbf{J}^T\mathbf{J}+\lambda \mathbf{I})\mathbf{v} = \mathbf{J}^Tr
+\large (\mathbf{J}^T\mathbf{J}+\lambda \mathbf{I})\triangle\mathbf{x} = \mathbf{J}^T\mathbf{r}
 $$
+($\mathbf{J}$: Jacobian matrix of residuals, $\mathbf{r}$: residuals, $\triangle\mathbf{x}$: updates to be solved)
 
-The Jacobian matrix requires large computation and memory space. To resolve them, we take advantage of [NVIDIA cuPyNumeric](https://github.com/nv-legate/cupynumeric). This NumPy-like scientific computing framework automatically distributes the Jacobian matrix and schedules computation to multiple GPUs.
 
-## Features
-* cuPyLMA utilizes LMA as the optimizer, which can converge to a lower loss in a shorter time than the Adam optimizer.
-    <p float="left">
-    <img src="figures/optimizer_history.png" width="50%"/>
-    <img src="figures/comparing_optimizer.png" width="45%"/>
-    </p>
+The LMA has the following advantages and disadvantages compared to the Adam:
+* Pros
+    - Faster convergence.
+    - More optimal solutions due to using the second-order information.
+* Cons
+    - Higher memory and computation requirement due to computing the Jacobian matrix and solving the equation, especially when the model has many parameters.
 
-* cuPyLMA explicityly computes the Jacobian matrix required by LMA, which boosts the performance while sacrificing the memory space. This is different from most LMA implementations which utilizes the [preconditioned conjugate gradient solver (PCG)](https://en.wikipedia.org/wiki/Conjugate_gradient_method).
-* cuPyLMA reduces the computation cost and the peak memory usage of the Jacobian matrix computation by selecting the best strategy. 
-    <p float="left">
-    <img src="figures/jacobian_scale_batch_time_dnn.svg" width="45%"/>
-    <img src="figures/jacobian_scale_batch_mem_dnn.svg" width="45%"/>
-    </p>
-* cuPyLMA scalably solves LMA parameter updates via cuPyNumeric.
-* cuPyLMA reduces the number of hyperparameter tuning. All we need to tune is the batch size.
+Our cuPyLMA aims to resolve the memory and computation bottlenecks of the LMA via utilizing multiple GPUs.
 
-## Install
-### Pip
+## Installation
+To install cuPyLMA along with dependencies, please run:
 ```bash
 pip install cupylma
 ```
 
-## Usage
-See [curve fitting example]().
+## Code Migration
+TODO
+
+## Examples
+* For curve fitting example, see [examples/curve](examples/curve/).
+* For MNIST image classification example, see [examples/mnist](examples/mnist/).
+
+## Performance
+TODO
 
 ## References
 [1] [fabiodimarco/torch-levenberg-marquardt](https://github.com/fabiodimarco/torch-levenberg-marquardt): Our base code refers to the repository.
