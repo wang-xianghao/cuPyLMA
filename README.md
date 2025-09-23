@@ -11,9 +11,11 @@ cuPyLMA is a scalable multi-GPU (deep learning optimizer) optimizer which implem
 
 ## Background
 The [Levenberg-Marquardt algorithm (LMA)](https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm) is a second-order optimization algorithm that utilizes the Jacobian matrix of the residuals to compute optimal parameter updates. In contrast, the widely used first-order optimizer Adam relies on the gradient of the loss function to determine these updates.
+
 $$
 \large (\mathbf{J}^T\mathbf{J}+\lambda \mathbf{I})\triangle\mathbf{x} = \mathbf{J}^T\mathbf{r}
 $$
+
 ($\mathbf{J}$: Jacobian matrix of residuals, $\mathbf{r}$: residuals, $\triangle\mathbf{x}$: updates to be solved)
 
 
