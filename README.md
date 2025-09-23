@@ -2,7 +2,7 @@
 
 [**Background**](#background)
 | [**Installation**](#installation)
-| [**Code Migration**](#code-migration)
+| [**Training**](#training)
 | [**Examples**](#examples)
 | [**Performance**](#performance)
 | [**Change logs**](CHANGELOG.md)
@@ -34,8 +34,48 @@ To install cuPyLMA along with dependencies, please run:
 pip install cupylma
 ```
 
-## Code Migration
-TODO
+## Training
+
+It is easy to migrate the training code that uses the Adam optimizer to cuPyLMA. cuPyLMA consists of the following components and each holds a seperate set of GPUs.
+* **Model component** stores the model parameters and computes the Jacobian matrix.
+* **Optimizer component** stores the Jacobian matrix and computes the optimal parameter updates.
+
+### Creating the model
+The model should be in one of GPUs held by the model component. The `get_available_gpus()` function gets the list of available GPUs for the model component.
+```python
+from cupylma import get_available_gpus
+
+devices = get_available_gpus()
+model = MyModel().to(devices[0])
+```
+
+### Configuring the optimizer
+The LMA optimizer requires a residual function rather than a loss function. The `devices` option specifies the GPUs for the model component.
+
+```python
+from cupylma import LMA
+
+residual_fn = lambda a, b : a - b # For simple regression
+lma = LMA(model, devices, residual_fn)
+```
+
+To find the residual function for more complex problems, please check [examples/mnist](examples/mnist/).
+
+### Training
+The LMA optimizer is stateless, so there is no need to reset gradients at each step. The `loss` return value is the average loss. The `terminated` return value indicates whether the train should be terminated.
+
+```python
+loss, terminated = lma.step(x, y)
+if terminated:
+    # Exit the train and save the model
+```
+
+### Running the code
+The `legate` command was installed together with cuPyLMA. The number of GPUs for the optimizer component is specified using the `--gpus` option.
+
+```bash
+legate --gpus 3 train.py
+```
 
 ## Examples
 * For curve fitting example, see [examples/curve](examples/curve/).
