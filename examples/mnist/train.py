@@ -53,7 +53,7 @@ for epoch in range(1, num_epochs + 1):
     epoch_time = (epoch_end - epoch_start) / 1e6
 
     avg_loss /= len(train_dataset)
-    epoch_times.append(avg_loss)
+    epoch_times.append(epoch_time)
     print(f'Epoch {epoch:3d}/{num_epochs:3d}: loss {avg_loss:10.3e}, epoch time {epoch_time:6.3f} seconds')
 
 # Print statistics
