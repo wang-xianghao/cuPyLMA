@@ -5,7 +5,7 @@
 ### Added
 
 - Add `get_available_gpus` to quickly retrieve available GPUs for the model component, excluding the GPUs allocated to Legate.
-<!-- - Add the MNIST example with guidance ([examples/mnist](./examples/mnist)).  -->
+- Add the MNIST example with guidance ([examples/mnist](./examples/mnist)). 
 
 ### Changed
 
