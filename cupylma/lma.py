@@ -10,8 +10,8 @@ from typing import Callable, Tuple, List
 from .config import configuration
 from .sliced_tensor import SlicedTensor
 
-NP_TORCH_TYPE_MAP = {np.float32 : torch.float32}
-TORCH_NP_TYPE_MAP = {torch.float32 : np.float32}
+NP_TORCH_TYPE_MAP = {np.float32 : torch.float32, np.float64 : torch.float64}
+TORCH_NP_TYPE_MAP = {torch.float32 : np.float32, torch.float64, np.float64}
 
 class LMA:
     @nvtx.annotate('save_parameters', domain='cuPyLMA', category='torch', color='orange')
