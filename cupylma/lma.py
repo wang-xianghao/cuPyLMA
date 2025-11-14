@@ -11,7 +11,7 @@ from .config import configuration
 from .sliced_tensor import SlicedTensor
 
 NP_TORCH_TYPE_MAP = {np.float32 : torch.float32, np.float64 : torch.float64}
-TORCH_NP_TYPE_MAP = {torch.float32 : np.float32, torch.float64, np.float64}
+TORCH_NP_TYPE_MAP = {torch.float32 : np.float32, torch.float64: np.float64}
 
 class LMA:
     @nvtx.annotate('save_parameters', domain='cuPyLMA', category='torch', color='orange')
@@ -364,7 +364,8 @@ class LMA:
         for i in range(configuration.UPDATE_ATTEMPTS):
             # Computed damped LHS
             with nvtx.annotate(f'damped_hessian', domain='cuPyLMA', category='cupynumeric', color='green'):
-                JJ_damped = JJ + self.damping_factor * np.eye(JJ.shape[0], dtype=self.dtype)
+                # JJ_damped = JJ + self.damping_factor * np.eye(JJ.shape[0], dtype=self.dtype)
+                JJ_damped = JJ + self.damping_factor * np.diag(np.diag(JJ))
 
             # Try to solve equation of updates
             solved = False
