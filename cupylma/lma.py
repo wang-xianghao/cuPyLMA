@@ -3,6 +3,7 @@ import torch
 import copy
 import warnings
 import nvtx
+import numpy
 
 from queue import Queue
 from typing import Callable, Tuple, List
@@ -495,7 +496,9 @@ class LMA:
 
                 # Pinned host updates
                 h_updates = torch.tensor(
-                    updates, dtype=self.model_dtype, device="cpu", pin_memory=True
+                    numpy.array(updates),
+                    dtype=self.model_dtype,
+                    device="cpu",
                 )
                 self._update_parameters(h_updates)
 
