@@ -496,7 +496,7 @@ class LMA:
 
                 # Pinned host updates
                 h_updates = torch.tensor(
-                    numpy.array(updates),
+                    updates,
                     dtype=self.model_dtype,
                     device="cpu",
                 )
